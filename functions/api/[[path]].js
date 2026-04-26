@@ -1,59 +1,83 @@
-// functions/api/[[path]].js
-
 export async function onRequest(context) {
     const { request, env, params } = context;
     const url = new URL(request.url);
     const method = request.method;
     const action = params.path ? params.path[0] : ''; 
 
-    // --- 1. 安全验证设置 ---
-    // 默认密码是 123456，建议你在 Pages 设置里添加环境变量 ADMIN_PASSWORD 来修改
-    const expectedPassword = env.ADMIN_PASSWORD || "123456"; 
-    
-    // VPS 专属拉取接口，免密码验证（依靠 IP 鉴权）
-    if (action === "config" && method === "GET") {
-        const ip = url.searchParams.get("ip");
-        let list = await env.KUI_KV.get("nodes", { type: "json" }) || [];
-        const myNode = list.find(n => n.vps_ip === ip);
-        return Response.json(myNode || { error: "未找到该 IP 的配置" });
-    }
-
-    // 登录校验接口
-    if (action === "login" && method === "POST") {
-        const data = await request.json();
-        if (data.password === expectedPassword) {
-            return Response.json({ success: true });
-        } else {
-            return Response.json({ error: "Unauthorized" }, { status: 401 });
-        }
-    }
-
-    // 其他管理接口，进行 Token 拦截
-    const authHeader = request.headers.get("Authorization");
-    if (authHeader !== expectedPassword) {
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    // --- 2. 面板增删改查逻辑 ---
-    let list = await env.KUI_KV.get("nodes", { type: "json" }) || [];
+    // 初始化获取全量数据
+    let vpsList = await env.KUI_KV.get("vps_list", { type: "json" }) || [];
+    let nodeList = await env.KUI_KV.get("node_list", { type: "json" }) || [];
 
     try {
-        if (action === "list" && method === "GET") {
-            return Response.json(list);
+        // --- 1. 面板前端获取合并数据 ---
+        if (action === "data" && method === "GET") {
+            return Response.json({ servers: vpsList, nodes: nodeList });
         }
 
-        if (action === "add" && method === "POST") {
-            const newNode = await request.json();
-            list.push(newNode);
-            await env.KUI_KV.put("nodes", JSON.stringify(list));
-            return Response.json({ success: true });
+        // --- 2. VPS (服务器) 管理 ---
+        if (action === "vps") {
+            if (method === "POST") {
+                const newVps = await request.json();
+                // 确保 IP 不重复
+                if (!vpsList.find(v => v.ip === newVps.ip)) {
+                    vpsList.push({ ip: newVps.ip, name: newVps.name, cpu: 0, mem: 0, last_report: null });
+                    await env.KUI_KV.put("vps_list", JSON.stringify(vpsList));
+                }
+                return Response.json({ success: true });
+            }
+            if (method === "DELETE") {
+                const targetIp = url.searchParams.get("ip");
+                vpsList = vpsList.filter(v => v.ip !== targetIp);
+                // 级联删除该机器下的节点
+                nodeList = nodeList.filter(n => n.vps_ip !== targetIp); 
+                await env.KUI_KV.put("vps_list", JSON.stringify(vpsList));
+                await env.KUI_KV.put("node_list", JSON.stringify(nodeList));
+                return Response.json({ success: true });
+            }
         }
 
-        if (action === "del" && method === "DELETE") {
-            const index = parseInt(url.searchParams.get("index"));
-            if (!isNaN(index) && index >= 0 && index < list.length) {
-                list.splice(index, 1);
-                await env.KUI_KV.put("nodes", JSON.stringify(list));
+        // --- 3. 节点配置管理 ---
+        if (action === "nodes") {
+            if (method === "POST") {
+                const newNode = await request.json();
+                nodeList.push(newNode);
+                await env.KUI_KV.put("node_list", JSON.stringify(nodeList));
+                return Response.json({ success: true });
+            }
+            if (method === "DELETE") {
+                const id = url.searchParams.get("id");
+                nodeList = nodeList.filter(n => n.id !== id);
+                await env.KUI_KV.put("node_list", JSON.stringify(nodeList));
+                return Response.json({ success: true });
+            }
+        }
+
+        // --- 4. 边缘机器拉取配置专用接口 (无需鉴权) ---
+        if (action === "config" && method === "GET") {
+            const ip = url.searchParams.get("ip");
+            const machineNodes = nodeList.filter(n => n.vps_ip === ip);
+            return Response.json({ success: true, configs: machineNodes });
+        }
+
+        // --- 5. 探针数据上报专用接口 (由 VPS 上的 Agent 脚本定时 POST 调用) ---
+        if (action === "report" && method === "POST") {
+            const data = await request.json(); 
+            // 期望收到的 payload: { ip: "8.8.8.8", cpu: 15, mem: 42 }
+            
+            let updated = false;
+            for (let i = 0; i < vpsList.length; i++) {
+                if (vpsList[i].ip === data.ip) {
+                    vpsList[i].cpu = data.cpu;
+                    vpsList[i].mem = data.mem;
+                    vpsList[i].last_report = Date.now(); // 刷新在线心跳时间
+                    updated = true;
+                    break;
+                }
+            }
+            
+            if (updated) {
+                // 注意：高频写入 KV 可能会触发免费版限制，建议 VPS 探针上报频率设为 3-5 分钟一次
+                await env.KUI_KV.put("vps_list", JSON.stringify(vpsList));
             }
             return Response.json({ success: true });
         }
