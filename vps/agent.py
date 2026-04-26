@@ -20,6 +20,13 @@ REPORT_URL = env["report_url"]
 VPS_IP = env["ip"]
 TOKEN = env["token"]
 
+# 伪装请求头，防止被 Cloudflare 拦截
+HEADERS = {
+    'Content-Type': 'application/json',
+    'Authorization': TOKEN,
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
+
 def get_system_status():
     try:
         cpu = float(os.popen("top -bn1 | grep load | awk '{printf \"%.2f\", $(NF-2)}'").read().strip())
@@ -31,21 +38,21 @@ def get_system_status():
 def report_status():
     status = get_system_status()
     status["ip"] = VPS_IP
-    req = urllib.request.Request(REPORT_URL, data=json.dumps(status).encode('utf-8'), headers={'Content-Type': 'application/json'})
+    req = urllib.request.Request(REPORT_URL, data=json.dumps(status).encode('utf-8'), headers=HEADERS)
     try:
         urllib.request.urlopen(req, timeout=5)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"探针上报失败: {e}")
 
 def fetch_and_apply_configs():
-    req = urllib.request.Request(f"{API_URL}?ip={VPS_IP}", headers={'Authorization': TOKEN})
+    req = urllib.request.Request(f"{API_URL}?ip={VPS_IP}", headers=HEADERS)
     try:
         res = urllib.request.urlopen(req, timeout=10)
         data = json.loads(res.read().decode('utf-8'))
         if data.get("success"):
             build_singbox_config(data["configs"])
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"拉取配置失败: {e}")
 
 def build_singbox_config(nodes):
     singbox_config = {
@@ -179,5 +186,4 @@ if __name__ == "__main__":
     while True:
         report_status()
         fetch_and_apply_configs()
-        # D1 库限制充足，允许配置60秒拉取周期
         time.sleep(60)
