@@ -3,6 +3,7 @@ import json
 import os
 import time
 import subprocess
+import random
 
 CONF_FILE = "/opt/kui/config.json"
 SINGBOX_CONF_PATH = "/etc/sing-box/config.json"
@@ -11,7 +12,7 @@ try:
     with open(CONF_FILE, 'r') as f:
         env = json.load(f)
 except Exception:
-    print("Agent 配置读取失败，请检查安装参数。")
+    print("环境配置读取失败，请检查安装流程。")
     exit(1)
 
 API_URL = env["api_url"]
@@ -57,7 +58,7 @@ def build_singbox_config(nodes):
     for node in nodes:
         in_tag = f"in-{node['id']}"
         
-        # 协议 1: VLESS 原版
+        # 1. VLESS 纯净协议
         if node["protocol"] == "VLESS":
             singbox_config["inbounds"].append({
                 "type": "vless",
@@ -67,7 +68,7 @@ def build_singbox_config(nodes):
                 "users": [{"uuid": node["uuid"]}]
             })
             
-        # 协议 2: VLESS-Reality
+        # 2. VLESS-Reality
         elif node["protocol"] == "Reality":
             singbox_config["inbounds"].append({
                 "type": "vless",
@@ -86,10 +87,41 @@ def build_singbox_config(nodes):
                     }
                 }
             })
+
+        # 3. Hysteria 2 (动态随机冷门域名自签 ECC 证书)
+        elif node["protocol"] == "Hysteria2":
+            cert_path = f"/opt/kui/hy2_{node['id']}_cert.pem"
+            key_path = f"/opt/kui/hy2_{node['id']}_key.pem"
             
-        # 协议 3: 任意门 / 链式代理
+            niche_domains = [
+                "www.chiba-u.ac.jp", "www.tsukuba.ac.jp", "www.jma.go.jp",
+                "www.epfl.ch", "www.su.se", "www.tu-berlin.de", "www.cnrs.fr"
+            ]
+            sni = random.choice(niche_domains)
+
+            if not os.path.exists(cert_path) or not os.path.exists(key_path):
+                cmd = f'openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout {key_path} -out {cert_path} -days 3650 -subj "/O=GlobalSign/CN={sni}" 2>/dev/null'
+                subprocess.run(cmd, shell=True, executable='/bin/bash')
+                subprocess.run(["chmod", "644", cert_path, key_path])
+
+            singbox_config["inbounds"].append({
+                "type": "hysteria2",
+                "tag": in_tag,
+                "listen": "::",
+                "listen_port": int(node["port"]),
+                "users": [{"password": node["uuid"]}],
+                "up_mbps": 1000,   
+                "down_mbps": 1000,
+                "tls": {
+                    "enabled": True,
+                    "alpn": ["h3"],
+                    "certificate_path": cert_path,
+                    "key_path": key_path
+                }
+            })
+            
+        # 4. 任意门 (端口转发 / 内部链路转发)
         elif node["protocol"] == "dokodemo-door":
-            # 统一入站监听
             singbox_config["inbounds"].append({
                 "type": "direct", 
                 "tag": in_tag,
@@ -99,7 +131,6 @@ def build_singbox_config(nodes):
             
             out_tag = f"out-{node['id']}"
             
-            # 判断转发模式
             if node.get("relay_type") == "internal" and node.get("chain_target"):
                 t = node["chain_target"]
                 outbound = {
@@ -109,7 +140,6 @@ def build_singbox_config(nodes):
                     "server_port": int(t["port"]),
                     "uuid": t["uuid"]
                 }
-                # 如果内部目标是 Reality，补齐客户端 TLS 信息
                 if t["protocol"] == "Reality":
                     outbound["tls"] = {
                         "enabled": True,
@@ -121,9 +151,7 @@ def build_singbox_config(nodes):
                         }
                     }
                 singbox_config["outbounds"].append(outbound)
-                
             else:
-                # 经典外网端口转发
                 singbox_config["outbounds"].append({
                     "type": "direct",
                     "tag": out_tag,
@@ -131,13 +159,11 @@ def build_singbox_config(nodes):
                     "override_port": int(node["target_port"])
                 })
                 
-            # 将该任意门的入站流量全部送往专有出站
             singbox_config["route"]["rules"].append({
                 "inbound": [in_tag],
                 "outbound": out_tag
             })
 
-    # 文件比对防抖更新
     new_config_str = json.dumps(singbox_config, indent=2)
     old_config_str = ""
     if os.path.exists(SINGBOX_CONF_PATH):
@@ -153,5 +179,5 @@ if __name__ == "__main__":
     while True:
         report_status()
         fetch_and_apply_configs()
-        # D1 额度极高，可以设定为每 60 秒上报并同步一次
+        # D1 库限制充足，允许配置60秒拉取周期
         time.sleep(60)
