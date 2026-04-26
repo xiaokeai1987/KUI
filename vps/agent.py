@@ -20,7 +20,6 @@ REPORT_URL = env["report_url"]
 VPS_IP = env["ip"]
 TOKEN = env["token"]
 
-# 伪装请求头，防止被 Cloudflare 拦截
 HEADERS = {
     'Content-Type': 'application/json',
     'Authorization': TOKEN,
@@ -41,8 +40,8 @@ def report_status():
     req = urllib.request.Request(REPORT_URL, data=json.dumps(status).encode('utf-8'), headers=HEADERS)
     try:
         urllib.request.urlopen(req, timeout=5)
-    except Exception as e:
-        print(f"探针上报失败: {e}")
+    except Exception:
+        pass
 
 def fetch_and_apply_configs():
     req = urllib.request.Request(f"{API_URL}?ip={VPS_IP}", headers=HEADERS)
@@ -51,8 +50,8 @@ def fetch_and_apply_configs():
         data = json.loads(res.read().decode('utf-8'))
         if data.get("success"):
             build_singbox_config(data["configs"])
-    except Exception as e:
-        print(f"拉取配置失败: {e}")
+    except Exception:
+        pass
 
 def build_singbox_config(nodes):
     singbox_config = {
@@ -65,7 +64,6 @@ def build_singbox_config(nodes):
     for node in nodes:
         in_tag = f"in-{node['id']}"
         
-        # 1. VLESS 纯净协议
         if node["protocol"] == "VLESS":
             singbox_config["inbounds"].append({
                 "type": "vless",
@@ -75,7 +73,6 @@ def build_singbox_config(nodes):
                 "users": [{"uuid": node["uuid"]}]
             })
             
-        # 2. VLESS-Reality
         elif node["protocol"] == "Reality":
             singbox_config["inbounds"].append({
                 "type": "vless",
@@ -95,7 +92,6 @@ def build_singbox_config(nodes):
                 }
             })
 
-        # 3. Hysteria 2 (动态随机冷门域名自签 ECC 证书)
         elif node["protocol"] == "Hysteria2":
             cert_path = f"/opt/kui/hy2_{node['id']}_cert.pem"
             key_path = f"/opt/kui/hy2_{node['id']}_key.pem"
@@ -127,7 +123,6 @@ def build_singbox_config(nodes):
                 }
             })
             
-        # 4. 任意门 (端口转发 / 内部链路转发)
         elif node["protocol"] == "dokodemo-door":
             singbox_config["inbounds"].append({
                 "type": "direct", 
