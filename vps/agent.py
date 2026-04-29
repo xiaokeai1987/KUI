@@ -3,6 +3,7 @@ import json
 import os
 import time
 import subprocess
+import re
 
 CONF_FILE = "/opt/kui/config.json"
 SINGBOX_CONF_PATH = "/etc/sing-box/config.json"
@@ -25,8 +26,70 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
 }
 
+# 全局状态字典
 last_reported_bytes = {}
+argo_tunnels = {}
 
+# ===============================================
+# Argo 全自动穿透核心模块
+# ===============================================
+def ensure_cloudflared():
+    if not os.path.exists("/usr/local/bin/cloudflared"):
+        print("首次检测到 Argo 节点，正在静默安装 cloudflared 穿透组件...")
+        os.system("curl -L -o /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64")
+        os.system("chmod +x /usr/local/bin/cloudflared")
+
+def start_argo_tunnel(port):
+    ensure_cloudflared()
+    cmd = ["/usr/local/bin/cloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}"]
+    # 后台挂起运行，并捕获 stderr
+    p = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True)
+    
+    url = None
+    start_time = time.time()
+    # 限制 15 秒抓取，防止阻塞主进程
+    while time.time() - start_time < 15:
+        line = p.stderr.readline()
+        if not line:
+            break
+        # 正则精准打击临时域名
+        match = re.search(r'https://([a-zA-Z0-9-]+\.trycloudflare\.com)', line)
+        if match:
+            url = match.group(1)
+            break
+    return p, url
+
+def process_argo_nodes(configs):
+    argo_urls_to_report = []
+    expected_argo_ports = []
+    
+    for node in configs:
+        if node.get('protocol') == 'VLESS-Argo':
+            port = str(node['port'])
+            expected_argo_ports.append(port)
+            
+            # 建立新隧道
+            if port not in argo_tunnels:
+                p, url = start_argo_tunnel(port)
+                if url:
+                    argo_tunnels[port] = {"proc": p, "url": url}
+                    argo_urls_to_report.append({"id": node["id"], "url": url})
+            else:
+                # 维持旧隧道状态回传
+                argo_urls_to_report.append({"id": node["id"], "url": argo_tunnels[port]["url"]})
+                
+    # 清理在面板上已被删除的僵尸隧道
+    for port in list(argo_tunnels.keys()):
+        if port not in expected_argo_ports:
+            argo_tunnels[port]["proc"].terminate()
+            del argo_tunnels[port]
+            
+    return argo_urls_to_report
+
+
+# ===============================================
+# 系统监控与流量抓取模块
+# ===============================================
 def get_system_status():
     try:
         cpu = float(os.popen("top -bn1 | grep load | awk '{printf \"%.2f\", $(NF-2)}'").read().strip())
@@ -55,10 +118,15 @@ def get_port_traffic(port, protocol="tcp"):
     except Exception:
         return 0
 
-def report_status(current_nodes):
+
+# ===============================================
+# 云端通讯模块
+# ===============================================
+def report_status(current_nodes, argo_urls):
     global last_reported_bytes
     status = get_system_status()
     status["ip"] = VPS_IP
+    status["argo_urls"] = argo_urls  # 注入抓取到的 Argo 域名
     
     node_traffic_deltas = []
     current_ids = set()
@@ -67,7 +135,8 @@ def report_status(current_nodes):
         nid = node["id"]
         port = node["port"]
         current_ids.add(nid)
-        proto = "udp" if node["protocol"] == "Hysteria2" else "tcp"
+        # Hysteria2 和 TUIC 必须抓 UDP 流量
+        proto = "udp" if node["protocol"] in ["Hysteria2", "TUIC"] else "tcp"
         
         current_bytes = get_port_traffic(port, proto)
         last_bytes = last_reported_bytes.get(nid, 0)
@@ -101,8 +170,12 @@ def fetch_and_apply_configs():
             return nodes
     except Exception:
         pass
-    return []
+    return None
 
+
+# ===============================================
+# Sing-box 全协议底层配置引擎
+# ===============================================
 def build_singbox_config(nodes):
     singbox_config = {
         "log": {"level": "warn"},
@@ -115,14 +188,15 @@ def build_singbox_config(nodes):
 
     for node in nodes:
         in_tag = f"in-{node['id']}"
+        proto = node["protocol"]
         
-        if node["protocol"] == "VLESS":
+        if proto == "VLESS":
             singbox_config["inbounds"].append({
                 "type": "vless", "tag": in_tag, "listen": "::", "listen_port": int(node["port"]),
                 "users": [{"uuid": node["uuid"]}]
             })
             
-        elif node["protocol"] == "Reality":
+        elif proto == "Reality":
             singbox_config["inbounds"].append({
                 "type": "vless", "tag": in_tag, "listen": "::", "listen_port": int(node["port"]),
                 "users": [{"uuid": node["uuid"], "flow": "xtls-rprx-vision"}],
@@ -135,25 +209,47 @@ def build_singbox_config(nodes):
                 }
             })
 
-        elif node["protocol"] == "Hysteria2":
-            cert_path = f"/opt/kui/hy2_{node['id']}_cert.pem"
-            key_path = f"/opt/kui/hy2_{node['id']}_key.pem"
-            sni = node.get("sni", "www.chiba-u.ac.jp") 
+        elif proto in ["Hysteria2", "TUIC"]:
+            # 自动化自签证书模块复用
+            cert_path = f"/opt/kui/cert_{node['id']}.pem"
+            key_path = f"/opt/kui/key_{node['id']}.pem"
+            sni = node.get("sni", "www.apple.com")
             
-            active_certs.extend([f"hy2_{node['id']}_cert.pem", f"hy2_{node['id']}_key.pem"])
+            active_certs.extend([f"cert_{node['id']}.pem", f"key_{node['id']}.pem"])
 
             if not os.path.exists(cert_path) or not os.path.exists(key_path):
                 cmd = f'openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout {key_path} -out {cert_path} -days 3650 -subj "/O=GlobalSign/CN={sni}" 2>/dev/null'
                 subprocess.run(cmd, shell=True, executable='/bin/bash')
                 subprocess.run(["chmod", "644", cert_path, key_path])
 
+            if proto == "Hysteria2":
+                singbox_config["inbounds"].append({
+                    "type": "hysteria2", "tag": in_tag, "listen": "::", "listen_port": int(node["port"]),
+                    "users": [{"password": node["uuid"]}],
+                    "tls": { "enabled": True, "alpn": ["h3"], "certificate_path": cert_path, "key_path": key_path }
+                })
+            elif proto == "TUIC":
+                singbox_config["inbounds"].append({
+                    "type": "tuic", "tag": in_tag, "listen": "::", "listen_port": int(node["port"]),
+                    "users": [{"uuid": node["uuid"], "password": node["private_key"]}],
+                    "tls": { "enabled": True, "alpn": ["h3"], "certificate_path": cert_path, "key_path": key_path }
+                })
+
+        elif proto == "VLESS-Argo":
+            # 必须且只能监听本地地址 127.0.0.1，防止公网暴露，交由 cloudflared 穿透
             singbox_config["inbounds"].append({
-                "type": "hysteria2", "tag": in_tag, "listen": "::", "listen_port": int(node["port"]),
-                "users": [{"password": node["uuid"]}],
-                "tls": { "enabled": True, "alpn": ["h3"], "certificate_path": cert_path, "key_path": key_path }
+                "type": "vless", "tag": in_tag, "listen": "127.0.0.1", "listen_port": int(node["port"]),
+                "users": [{"uuid": node["uuid"]}],
+                "transport": {"type": "ws", "path": "/"}
             })
             
-        elif node["protocol"] == "dokodemo-door":
+        elif proto == "Socks5":
+            singbox_config["inbounds"].append({
+                "type": "socks", "tag": in_tag, "listen": "::", "listen_port": int(node["port"]),
+                "users": [{"username": node["uuid"], "password": node["private_key"]}]
+            })
+            
+        elif proto == "dokodemo-door":
             singbox_config["inbounds"].append({ "type": "direct", "tag": in_tag, "listen": "::", "listen_port": int(node["port"]) })
             out_tag = f"out-{node['id']}"
             
@@ -168,9 +264,10 @@ def build_singbox_config(nodes):
             
             singbox_config["route"]["rules"].append({ "inbound": [in_tag], "outbound": out_tag })
 
+    # 智能清理废弃节点的证书文件
     try:
         for filename in os.listdir("/opt/kui/"):
-            if filename.startswith("hy2_") and filename.endswith(".pem"):
+            if (filename.startswith("cert_") or filename.startswith("key_")) and filename.endswith(".pem"):
                 if filename not in active_certs:
                     os.remove(os.path.join("/opt/kui/", filename))
     except Exception:
@@ -182,14 +279,28 @@ def build_singbox_config(nodes):
         with open(SINGBOX_CONF_PATH, "r") as f:
             old_config_str = f.read()
 
+    # 热重载判定
     if new_config_str != old_config_str:
         with open(SINGBOX_CONF_PATH, "w") as f:
             f.write(new_config_str)
         subprocess.run(["systemctl", "restart", "sing-box"])
 
+
+# ===============================================
+# 主循环引擎
+# ===============================================
 if __name__ == "__main__":
     current_active_nodes = []
     while True:
-        current_active_nodes = fetch_and_apply_configs() or current_active_nodes
-        report_status(current_active_nodes)
+        # 拉取并应用最新节点配置
+        fetched_nodes = fetch_and_apply_configs()
+        if fetched_nodes is not None:
+            current_active_nodes = fetched_nodes
+            
+        # 守护 Argo 穿透隧道，抓取最新 URL
+        argo_urls = process_argo_nodes(current_active_nodes)
+        
+        # 将流量和 Argo 域名汇报给 Cloudflare 数据库
+        report_status(current_active_nodes, argo_urls)
+        
         time.sleep(60)
