@@ -1,9 +1,18 @@
+# -*- coding: utf-8 -*-
 import urllib.request
 import json
 import os
 import time
 import subprocess
 import re
+import sys
+
+# 强制设置标准输出为 UTF-8，防止某些极端环境下的系统级编码崩溃
+if sys.stdout.encoding != 'UTF-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 CONF_FILE = "/opt/kui/config.json"
 SINGBOX_CONF_PATH = "/etc/sing-box/config.json"
@@ -12,7 +21,8 @@ try:
     with open(CONF_FILE, 'r') as f:
         env = json.load(f)
 except Exception:
-    print("环境配置读取失败，请检查安装流程。")
+    # 修复：改为纯英文输出，彻底杜绝 systemd 下的 UnicodeEncodeError
+    print("Failed to read config file. Please check the installation process.")
     exit(1)
 
 API_URL = env["api_url"]
@@ -35,7 +45,8 @@ argo_tunnels = {}
 # ===============================================
 def ensure_cloudflared():
     if not os.path.exists("/usr/local/bin/cloudflared"):
-        print("首次检测到 Argo 节点，正在静默安装 cloudflared 穿透组件...")
+        # 修复：改为纯英文输出
+        print("First Argo node detected. Installing cloudflared silently...")
         os.system("curl -L -o /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64")
         os.system("chmod +x /usr/local/bin/cloudflared")
 
