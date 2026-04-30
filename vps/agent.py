@@ -159,7 +159,6 @@ def get_system_status():
         stats["udp_conn"] = int(os.popen("ss -anu 2>/dev/null | grep -v State | wc -l").read().strip() or 0)
     except Exception: pass
 
-    # 🌟 新增：带时间戳因子的精密网速计算 (完美适配快慢双轨变频)
     try:
         rx_now = 0
         tx_now = 0
@@ -327,6 +326,14 @@ def build_singbox_config(nodes):
                     "tls": { "enabled": True, "alpn": ["h3"], "certificate_path": cert_path, "key_path": key_path }
                 })
 
+        # 🌟 SS2022 代理底层支持
+        elif proto == "SS2022":
+            singbox_config["inbounds"].append({
+                "type": "shadowsocks", "tag": in_tag, "listen": "::", "listen_port": int(node["port"]),
+                "method": node.get("sni", "2022-blake3-aes-128-gcm"),
+                "password": node["private_key"]
+            })
+
         elif proto == "VLESS-Argo":
             singbox_config["inbounds"].append({
                 "type": "vless", "tag": in_tag, "listen": "127.0.0.1", "listen_port": int(node["port"]),
@@ -378,7 +385,7 @@ def build_singbox_config(nodes):
             subprocess.run(["systemctl", "restart", "sing-box"])
 
 # ===============================================
-# 🌟 全新极速主循环引擎 (Fast-Mode)
+# 🌟 极速主循环引擎 (Fast-Mode)
 # ===============================================
 if __name__ == "__main__":
     current_active_nodes = []
@@ -387,27 +394,23 @@ if __name__ == "__main__":
     last_report_time = 0
     fast_mode = False
     
-    # 强制进行一次初始抓取
     time.sleep(1)
     
     while True:
         now = time.time()
 
-        # 1. 独立时钟：拉取配置固定为 60s (省流防拥堵)
         if now - last_config_fetch >= 60:
             fetched_nodes = fetch_and_apply_configs()
             if fetched_nodes is not None:
                 current_active_nodes = fetched_nodes
             last_config_fetch = now
 
-        # 2. 独立时钟：探针上报极速变频 (有人看就是2s，没人看就是15s)
         target_interval = 2 if fast_mode else 15
         
         if now - last_report_time >= target_interval:
             argo_urls = process_argo_nodes(current_active_nodes)
             res_json = report_status(current_active_nodes, argo_urls)
             
-            # 解析云端发来的“管理员在看”信号
             if res_json and isinstance(res_json, dict) and res_json.get("fast_mode"):
                 fast_mode = True
             else:
@@ -415,5 +418,4 @@ if __name__ == "__main__":
                 
             last_report_time = time.time()
         
-        # 内核睡眠时钟：1秒，保证时序精准切变
         time.sleep(1)
