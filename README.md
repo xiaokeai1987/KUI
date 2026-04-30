@@ -1,4 +1,4 @@
-# KUI VPS Cluster Gateway | 群控VPS网关面板 🚀
+# K-UI VPS Cluster Gateway | 群控VPS网关面板 🚀
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Version](https://img.shields.io/badge/version-v1.0-green.svg)
