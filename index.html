@@ -75,7 +75,6 @@
             <!-- ================= 管理员专属板块 ================= -->
             <div v-if="role === 'admin'" class="space-y-8">
                 
-                <!-- 大盘统计 (仅在服务器节点页面显示) -->
                 <div v-if="activeTab === 'nodes'" class="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div class="bg-white/60 backdrop-blur-xl p-5 rounded-[2rem] border border-white shadow-lg shadow-indigo-100/30 text-center">
                         <div class="text-[10px] text-slate-400 font-bold mb-1 tracking-widest">ONLINE SERVERS</div>
@@ -100,7 +99,6 @@
                     <div class="bg-white/60 backdrop-blur-xl p-6 md:p-8 rounded-[2rem] border border-white shadow-xl shadow-slate-200/40 flex flex-col xl:flex-row gap-4 items-end">
                         <div class="flex-1 w-full"><label class="block text-xs font-bold text-slate-400 mb-2 pl-2">新建用户名</label><input v-model="newUser.username" placeholder="如: user01" class="w-full bg-white/50 border border-white p-3 rounded-2xl transition hover:bg-white focus:bg-white"></div>
                         
-                        <!-- 🌟 优化：默认空输入框，支持自定义输入，右侧保留一键随机按钮 -->
                         <div class="flex-1 w-full relative">
                             <label class="block text-xs font-bold text-slate-400 mb-2 pl-2">登录密码 / 随机UUID</label>
                             <input v-model="newUser.password" type="text" placeholder="自定义密码 或 UUID" class="w-full bg-white/50 border border-white p-3 pr-12 rounded-2xl transition hover:bg-white focus:bg-white font-mono text-sm">
@@ -146,11 +144,9 @@
                         <button @click="addVps" class="bg-slate-800 text-white px-8 py-3.5 rounded-2xl font-bold hover:bg-black transition-all shadow-lg hover:scale-105 whitespace-nowrap">接入机器</button>
                     </div>
 
-                    <!-- 机器列表大网格 -->
                     <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
                         <div v-for="vps in servers" :key="vps.ip" class="bg-white/70 backdrop-blur-xl rounded-[2rem] border border-white shadow-xl shadow-slate-200/40 flex flex-col overflow-hidden transition-all hover:shadow-2xl">
                             
-                            <!-- 机器头部监控数据 -->
                             <div class="p-6 md:p-8 relative">
                                 <div class="flex justify-between items-start mb-4">
                                     <div>
@@ -207,6 +203,7 @@
                                             <option value="Reality">VLESS Reality (防封锁)</option>
                                             <option value="Hysteria2">Hysteria 2 (极速)</option>
                                             <option value="TUIC">TUIC v5 (高并发)</option>
+                                            <option value="SS2022">SS2022 (新一代SS)</option>
                                             <option value="VLESS-Argo">VLESS Argo (⚡️全自动穿透)</option>
                                             <option value="Socks5">Socks5 (基础代理)</option>
                                             <option value="dokodemo-door">Dokodemo (内部转发)</option>
@@ -232,6 +229,16 @@
                                     
                                     <div v-if="newNodeParams[vps.ip].protocol === 'TUIC'" class="bg-slate-100/50 p-3 rounded-xl mb-3">
                                         <input v-model="newNodeParams[vps.ip].sni" placeholder="SNI 域名 (TUIC 必填)" class="w-full bg-transparent outline-none text-sm font-medium text-slate-700">
+                                    </div>
+
+                                    <!-- 🌟 SS2022 加密方式选择 -->
+                                    <div v-if="newNodeParams[vps.ip].protocol === 'SS2022'" class="bg-slate-100/50 p-3 rounded-xl mb-3">
+                                        <select v-model="newNodeParams[vps.ip].sni" class="w-full bg-transparent outline-none text-sm font-medium text-slate-700">
+                                            <option value="">-- 选择加密方式 (默认 aes-128-gcm) --</option>
+                                            <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm (推荐)</option>
+                                            <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
+                                            <option value="2022-blake3-chacha20-poly1305">2022-blake3-chacha20-poly1305</option>
+                                        </select>
                                     </div>
                                     
                                     <div v-if="newNodeParams[vps.ip].protocol === 'VLESS-Argo'" class="bg-indigo-50 border border-indigo-100/50 p-4 rounded-xl mb-3">
@@ -268,6 +275,7 @@
                                             </div>
                                             <div v-if="node.protocol === 'VLESS-Argo'" class="text-[11px] p-1.5 rounded-lg overflow-hidden text-ellipsis whitespace-nowrap max-w-full inline-block" :class="node.sni.includes('等待') ? 'bg-amber-50 text-amber-600 animate-pulse font-bold' : 'bg-emerald-50 border border-emerald-100 text-emerald-700 font-mono font-bold'">Argo: {{ node.sni }}</div>
                                             <div v-else-if="node.protocol === 'TUIC' || node.protocol === 'Reality' || node.protocol === 'Hysteria2'" class="text-[11px] bg-slate-50 text-slate-500 p-1.5 rounded-lg overflow-hidden text-ellipsis font-mono inline-block">SNI: {{ node.sni }}</div>
+                                            <div v-else-if="node.protocol === 'SS2022'" class="text-[11px] bg-slate-50 text-slate-500 p-1.5 rounded-lg overflow-hidden text-ellipsis font-mono inline-block">Method: {{ node.sni }}</div>
                                             <div v-else-if="node.protocol === 'dokodemo-door'" class="text-[11px] bg-slate-50 text-slate-500 p-1.5 rounded-lg overflow-hidden text-ellipsis inline-block">{{ node.relay_type === 'external' ? `转发至: ${node.target_ip}:${node.target_port}` : `链式内部节点` }}</div>
                                         </div>
                                         <div class="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -311,7 +319,6 @@
             <!-- ================= 普通用户受限视图 ================= -->
             <div v-if="role === 'user'" class="space-y-8 animate-fade-in">
                 
-                <!-- 用户专属大盘区 -->
                 <div v-if="activeTab === 'dashboard'" class="space-y-8">
                     <div class="bg-white/60 backdrop-blur-xl p-10 md:p-16 rounded-[3rem] shadow-2xl border border-white text-center relative overflow-hidden">
                         <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-lg h-32 bg-indigo-400/20 blur-3xl rounded-full pointer-events-none"></div>
@@ -336,10 +343,9 @@
                 </div>
             </div>
 
-            <!-- ================= 🌟 系统设置板块 (区分管理员与用户) ================= -->
+            <!-- ================= 🌟 系统设置板块 ================= -->
             <div v-if="activeTab === 'settings'" class="space-y-6">
                 
-                <!-- 管理员特权设置 -->
                 <template v-if="role === 'admin'">
                     <div class="bg-white/60 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white shadow-xl shadow-slate-200/40">
                         <h3 class="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">⚙️ 系统外观与偏好</h3>
@@ -360,7 +366,6 @@
                     </div>
                 </template>
 
-                <!-- 普通用户专属设置 -->
                 <template v-if="role === 'user'">
                     <div class="bg-white/60 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white shadow-xl shadow-slate-200/40">
                         <h3 class="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">🔑 账号安全</h3>
@@ -404,7 +409,6 @@
                 const newNodeParams = reactive({}); const newUser = reactive({ username: '', password: '', traffic_limit_gb: '', expire_date: '' });
                 const currentDomain = window.location.origin;
 
-                // 🌟 新增：独立订阅令牌与站点名称响应式绑定
                 const mySubToken = ref('');
                 const siteTitle = ref('Cluster Gateway');
                 const siteTitleInput = ref('');
@@ -461,7 +465,6 @@
                         const res = await fetchApi('/api/data'); const data = await res.json();
                         servers.value = data.servers || []; nodes.value = data.nodes || []; users.value = data.users || [];
                         
-                        // 同步服务器传回的自定义站点名称和独立订阅 Token
                         if (data.siteTitle) { siteTitle.value = data.siteTitle; siteTitleInput.value = data.siteTitle; }
                         if (data.mySubToken) mySubToken.value = data.mySubToken;
 
@@ -485,7 +488,6 @@
                     }
                 };
 
-                // 🌟 新增：用户重置UUID密码的方法
                 const generateUUIDForNewUser = () => { newUser.password = crypto.randomUUID(); };
 
                 const addUser = async () => { 
@@ -493,7 +495,7 @@
                     const limit = newUser.traffic_limit_gb ? Math.floor(parseFloat(newUser.traffic_limit_gb) * 1073741824) : 0; 
                     const expire = newUser.expire_date ? new Date(newUser.expire_date).getTime() : 0; 
                     await fetchApi('/api/users', { method: 'POST', body: JSON.stringify({ ...newUser, traffic_limit: limit, expire_time: expire }) }); 
-                    Object.assign(newUser, { username: '', password: '', traffic_limit_gb: '', expire_date: '' }); 
+                    Object.assign(newUser, { username: '', traffic_limit_gb: '', expire_date: '' }); 
                     refreshData(); 
                 };
                 
@@ -522,6 +524,17 @@
                     else if (p.protocol === 'VLESS-Argo') { payload.sni = '⏳ 正在等待 VPS 自动回传穿透域名...'; }
                     else if (p.protocol === 'Socks5') { payload.uuid = crypto.randomUUID().replace(/-/g, '').substring(0, 8); payload.private_key = crypto.randomUUID().replace(/-/g, '').substring(0, 12); }
                     else if (p.protocol === 'dokodemo-door') { payload.relay_type = p.relay_type; if (p.relay_type === 'external') { payload.target_ip = p.target_ip; payload.target_port = p.target_port; } else { payload.target_id = p.target_id; } }
+                    // 🌟 新增 SS2022 逻辑：根据 method 生成 16 或 32 字节的强加密 Base64 Key
+                    else if (p.protocol === 'SS2022') {
+                        payload.sni = p.sni || '2022-blake3-aes-128-gcm';
+                        const keyLen = payload.sni.includes('128') ? 16 : 32;
+                        const key = new Uint8Array(keyLen);
+                        crypto.getRandomValues(key);
+                        let binary = '';
+                        for (let i = 0; i < key.length; i++) binary += String.fromCharCode(key[i]);
+                        payload.private_key = btoa(binary);
+                        payload.uuid = crypto.randomUUID(); // 为了兼容表结构填充字段
+                    }
                     
                     await fetchApi('/api/nodes', { method: 'POST', body: JSON.stringify(payload) }); refreshData();
                 };
@@ -548,7 +561,6 @@
                     else return `apt-get update -y && apt-get install -y curl && bash <(curl -sL ${scriptUrl}) --api "${currentDomain}" --ip "${ip}" --token "${authKey.value}"`;
                 };
 
-                // 🌟 新增：系统设置底层交互逻辑
                 const saveSiteTitle = async () => {
                     if(!siteTitleInput.value) return alert('名称不能为空！');
                     await fetchApi('/api/settings', { method: 'POST', body: JSON.stringify({ site_title: siteTitleInput.value }) });
@@ -571,7 +583,6 @@
                     }
                 };
 
-                // 🌟 修复：生成订阅链接时，优先采用脱钩的 subToken，若没有则回退到 password hash
                 const generateSubLink = (ip='') => {
                     const tokenToUse = mySubToken.value || authKey.value;
                     return `${currentDomain}/api/sub?user=${currentUser.value}&token=${tokenToUse}${ip?`&ip=${ip}`:''}`;
