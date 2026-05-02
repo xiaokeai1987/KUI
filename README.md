@@ -35,12 +35,12 @@ KUI 是一款基于 **Cloudflare Pages + D1 数据库** 构建的轻量级、无
 ## 🚀 闪电部署
 
 ### Step 1: 准备 Cloudflare D1 数据库
-1. 登录 Cloudflare 控制台，进入 `Workers & Pages` -> `D1`。
+1. 登录 Cloudflare 控制台，进入 `构建` -> `存储和数据库`-> `D1 SQL数据库`。
 2. 点击“创建数据库”，命名为 `kui-db`（创建后即可退出，**无需执行任何建表操作**）。
 
 ### Step 2: 部署主控端 (Cloudflare Pages)
 1. Fork 本仓库到你的 Github。
-2. 在 Cloudflare 控制台左侧进入 `Workers & Pages`，点击 `创建` -> `Pages` -> `连接到 Git`。
+2. 在 Cloudflare 控制台左侧进入 `构建` -> `计算`-> Workers和Pages`，点击 `创建应用程序` -> `想要部署 Pages？点开始使用` -> `连接到 Git`。
 3. 选择你 Fork 的仓库进行部署，框架预设选择 `None`。
 4. **绑定数据库与变量** (进入已部署的 Pages 项目 `设置`)：
    - **函数 -> D1 数据库绑定**：将变量名设为 `DB`，并选择刚才创建的 `kui-db`。
