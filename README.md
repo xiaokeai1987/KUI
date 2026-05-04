@@ -1,3 +1,7 @@
+## 🤝 参与贡献 (Contributing)
+
+如果你喜欢这个项目，欢迎提交 Pull Request，或者给个 ⭐ **Star** 支持一下！
+
 # K-UI VPS Cluster Gateway | 群控VPS网关面板 🚀
 ## 已知问题，IPV6没有适配，IPV6只能单节点添加vless argo节点可用，IPV4功能一切正常
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
