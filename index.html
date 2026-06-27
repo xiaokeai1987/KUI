@@ -939,6 +939,7 @@
                             if (probeView.value === 'map') drawMarkers();
                             if (probeSys.is_public !== 'true' && !isLoggedIn.value) showLoginModal.value = true;
                             
+                            // 弹窗逻辑
                             if (probeSys.enable_popup === 'true') {
                                 const lastSeen = localStorage.getItem('kui_popup_seen');
                                 if (!lastSeen || Date.now() - parseInt(lastSeen) > 86400000) showWelcomePopup.value = true;
