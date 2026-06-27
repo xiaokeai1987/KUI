@@ -518,17 +518,20 @@
                     </div>
 
                     <div class="bg-white/60 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white shadow-xl shadow-slate-200/40">
-                        <h3 class="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">📊 探针大盘外观与设置</h3>
+                        <h3 class="text-xl font-black text-slate-800 mb-6 flex items-center justify-between">
+                            <div class="flex items-center gap-2">📊 探针大盘外观与设置</div>
+                            <button @click="pullGithubNodes" class="text-xs bg-emerald-100 text-emerald-600 px-3 py-1.5 rounded-lg font-bold hover:bg-emerald-200 transition-colors shadow-sm">🔄 云端拉取最新主题/测速库</button>
+                        </h3>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
                             <div class="space-y-4">
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">大盘展示标题</label><input v-model="probeSys.site_title" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-medium text-slate-700"></div>
                                 <div>
                                     <label class="block text-xs font-bold text-slate-500 mb-1">前端主题风格</label>
                                     <select v-model="probeSys.theme" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-medium text-slate-700">
-                                        <option value="theme1">1. 默认清爽白 (Classic)</option><option value="theme2">2. 暗黑极客 (Dark)</option><option value="theme3">3. 新粗野主义 (Brutalism)</option><option value="theme4">4. 动态渐变毛玻璃 (Glass)</option><option value="theme5">5. 赛博朋克 (Cyberpunk)</option><option value="theme6">6. 完全自定义 CSS</option>
+                                        <option v-for="t in availableThemes" :key="t.id" :value="t.id">{{ t.name }}</option>
                                     </select>
                                 </div>
-                                <div v-if="probeSys.theme === 'theme6'"><label class="block text-xs font-bold text-slate-500 mb-1">自定义 CSS 代码</label><textarea v-model="probeSys.custom_css" rows="3" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-mono"></textarea></div>
+                                <div v-if="probeSys.theme === 'theme6' || hasCustomCssFlag"><label class="block text-xs font-bold text-slate-500 mb-1">自定义 CSS 代码</label><textarea v-model="probeSys.custom_css" rows="3" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-mono"></textarea></div>
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">自定义背景图片 URL (清空恢复纯色)</label><input v-model="probeSys.custom_bg" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-medium text-slate-700"></div>
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">自定义 &lt;head&gt; 注入</label><textarea v-model="probeSys.custom_head" rows="2" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-mono"></textarea></div>
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">自定义底部 Script 注入</label><textarea v-model="probeSys.custom_script" rows="2" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-mono"></textarea></div>
@@ -546,9 +549,24 @@
                                 <div v-if="probeSys.enable_popup === 'true'"><textarea v-model="probeSys.popup_content" rows="4" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm" placeholder="<h3>公告</h3><p>内容...</p>"></textarea></div>
 
                                 <label class="block text-sm font-bold text-blue-600 mt-6 mb-2">📡 动态下发三网测速节点配置</label>
-                                <div><label class="block text-xs font-bold text-slate-500 mb-1">电信 (CT)</label><input v-model="probeSys.ping_node_ct" placeholder="默认: default" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm"></div>
-                                <div><label class="block text-xs font-bold text-slate-500 mb-1">联通 (CU)</label><input v-model="probeSys.ping_node_cu" placeholder="默认: default" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm"></div>
-                                <div><label class="block text-xs font-bold text-slate-500 mb-1">移动 (CM)</label><input v-model="probeSys.ping_node_cm" placeholder="默认: default" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm"></div>
+                                <div><label class="block text-xs font-bold text-slate-500 mb-1">电信 (CT)</label>
+                                    <select v-model="probeSys.ping_node_ct" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm">
+                                        <option value="default">默认节点 (双栈多节点轮询)</option>
+                                        <option v-for="n in pingNodes.ct" :key="n.host" :value="n.host">{{ n.name }}</option>
+                                    </select>
+                                </div>
+                                <div><label class="block text-xs font-bold text-slate-500 mb-1">联通 (CU)</label>
+                                    <select v-model="probeSys.ping_node_cu" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm">
+                                        <option value="default">默认节点 (双栈多节点轮询)</option>
+                                        <option v-for="n in pingNodes.cu" :key="n.host" :value="n.host">{{ n.name }}</option>
+                                    </select>
+                                </div>
+                                <div><label class="block text-xs font-bold text-slate-500 mb-1">移动 (CM)</label>
+                                    <select v-model="probeSys.ping_node_cm" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm">
+                                        <option value="default">默认节点 (双栈多节点轮询)</option>
+                                        <option v-for="n in pingNodes.cm" :key="n.host" :value="n.host">{{ n.name }}</option>
+                                    </select>
+                                </div>
 
                                 <label class="block text-sm font-bold text-rose-500 mt-6 mb-2">✈️ Telegram 管理与告警设置</label>
                                 <div>
@@ -677,7 +695,17 @@
                 let initOsMap = {}; try { initOsMap = JSON.parse(localStorage.getItem('kui_deploy_os') || '{}'); } catch(e) {}
                 const deployOsMap = reactive(initOsMap);
 
-                // 移除去中心化排行相关变量
+                // --- 动态拉取核心 ---
+                const availableThemes = ref([
+                    { id: "theme1", name: "1. 默认清爽白 (Classic)", is_dark: false, css: "" },
+                    { id: "theme2", name: "2. 暗黑极客 (Dark)", is_dark: true, css: "" },
+                    { id: "theme3", name: "3. 新粗野主义 (Brutalism)", is_dark: false, css: "" },
+                    { id: "theme4", name: "4. 动态渐变毛玻璃 (Glass)", is_dark: true, css: "" },
+                    { id: "theme5", name: "5. 赛博朋克 (Cyberpunk)", is_dark: true, css: "" },
+                    { id: "theme6", name: "6. 完全自定义 CSS", is_dark: true, has_custom_css: true, css: "" }
+                ]);
+                const pingNodes = reactive({ ct: [], cu: [], cm: [] });
+
                 const probeSys = reactive({ theme: 'theme1', is_public: 'true', site_title: 'Server Monitor Pro', custom_bg: '', custom_css: '', custom_head: '', custom_script: '', report_interval: '5', visits_total: '0', visits_today: '0', ping_node_ct: 'default', ping_node_cu: 'default', ping_node_cm: 'default', enable_popup: 'false', popup_content: '', tg_notify: 'false', tg_bot_token: '', tg_chat_id: '' });
                 const publicProbeServers = ref([]);
                 const probeView = ref(localStorage.getItem('monitor_preferred_view') || 'card');
@@ -691,19 +719,41 @@
                 const qrModalOpen = ref(false);
                 const qrCodeImage = ref('');
                 
-                // 公告弹窗
                 const showWelcomePopup = ref(false);
 
                 watch(activeTab, (val) => localStorage.setItem('monitor_preferred_tab', val));
                 watch(probeView, (val) => localStorage.setItem('monitor_preferred_view', val));
+
+                const hasCustomCssFlag = computed(() => {
+                    const t = availableThemes.value.find(x => x.id === probeSys.theme);
+                    return t ? t.has_custom_css : false;
+                });
+
+                const parseCachedNodes = (dataStr) => {
+                    if (!dataStr) return;
+                    try {
+                        const parsed = JSON.parse(dataStr);
+                        if (parsed.themes && Array.isArray(parsed.themes)) availableThemes.value = parsed.themes;
+                        if (parsed.ct) pingNodes.ct = parsed.ct;
+                        if (parsed.cu) pingNodes.cu = parsed.cu;
+                        if (parsed.cm) pingNodes.cm = parsed.cm;
+                    } catch(e) {}
+                };
 
                 const updateCustomStyles = () => {
                     document.body.className = probeSys.theme || 'theme1';
 
                     let styleTag = document.getElementById('kui-custom-styles');
                     if (!styleTag) { styleTag = document.createElement('style'); styleTag.id = 'kui-custom-styles'; document.head.appendChild(styleTag); }
+                    
+                    const currentTheme = availableThemes.value.find(t => t.id === probeSys.theme) || availableThemes.value[0];
                     let css = '';
-                    if (probeSys.custom_css) css += probeSys.custom_css + '\n';
+                    if (currentTheme && currentTheme.css) css += currentTheme.css + '\n';
+                    
+                    if (probeSys.custom_css && (probeSys.theme === 'theme6' || (currentTheme && currentTheme.has_custom_css))) {
+                        css += probeSys.custom_css + '\n';
+                    }
+
                     if (probeSys.custom_bg) css += `body { background: url('${probeSys.custom_bg}') no-repeat center center fixed !important; background-size: cover !important; } .probe-vps-card, .probe-global-stats, .probe-header-card, .probe-chart-card, .probe-custom-table, .probe-filter-tag, .probe-view-controls { background: rgba(255, 255, 255, 0.4) !important; backdrop-filter: blur(12px) !important; -webkit-backdrop-filter: blur(12px) !important; border: 1px solid rgba(255, 255, 255, 0.6) !important; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1) !important; color: #111 !important; } .probe-vps-card:hover { background: rgba(255, 255, 255, 0.6) !important; transform: translateY(-3px); } .probe-group-header { color: #fff !important; text-shadow: 0 2px 5px rgba(0,0,0,0.6) !important; border-left-color: #fff !important; } .probe-g-val, .probe-card-title { color: #000 !important; font-weight: 800 !important; } .probe-g-label, .probe-g-sub, .probe-card-meta { color: #333 !important; font-weight: 600 !important; } .probe-stat-bar-full { background: rgba(0,0,0,0.1) !important; }`;
                     styleTag.innerHTML = css;
 
@@ -760,7 +810,7 @@
                 const probeGlobalSpeedOut = computed(() => publicProbeServers.value.reduce((sum, s) => sum + (parseFloat(s.net_out_speed)||0), 0));
                 const probeGlobalNetRx = computed(() => publicProbeServers.value.reduce((sum, s) => sum + (parseFloat(s[probeSys.auto_reset_traffic === 'true' ? 'monthly_rx' : 'net_rx'])||0), 0));
                 const probeGlobalNetTx = computed(() => publicProbeServers.value.reduce((sum, s) => sum + (parseFloat(s[probeSys.auto_reset_traffic === 'true' ? 'monthly_tx' : 'net_tx'])||0), 0));
-                const probeGroups = computed(() => { const groups = {}; publicProbeServers.value.forEach(s => { const g = s.server_group || '默认分组'; if(!groups[g]) groups[g] = []; groups[g].push(s); }); return groups; });
+                
                 const filteredProbeGroups = computed(() => { 
                     const groups = {}; 
                     filteredProbeServers.value.forEach(s => { const g = s.server_group || '默认分组'; if(!groups[g]) groups[g] = []; groups[g].push(s); }); 
@@ -853,6 +903,17 @@
                     showWelcomePopup.value = false;
                 };
 
+                // --- GitHub 动态拉取 ---
+                const pullGithubNodes = async () => {
+                    try {
+                        const res = await fetchApi('/api/probe/admin/pull_github', { method: 'POST' });
+                        if (res.ok) {
+                            alert('✅ 云端主题与测速节点数据拉取成功！');
+                            refreshData(); fetchProbeData();
+                        }
+                    } catch(e) { alert('拉取失败: ' + e); }
+                };
+
                 let isFirstLoad = true;
                 let isFetchingProbe = false;
                 const fetchProbeData = async (isDetail = false) => {
@@ -870,7 +931,10 @@
                             isFirstLoad = false;
                             const res = await fetch(`/api/probe/public${ajaxParam}`, {headers: authHeader});
                             if (!res.ok) { if(res.status===401) showLoginModal.value = true; throw new Error("Private Dashboard"); }
-                            const data = await res.json(); Object.assign(probeSys, data.settings); publicProbeServers.value = data.servers || []; updateCustomStyles();
+                            const data = await res.json(); 
+                            Object.assign(probeSys, data.settings); 
+                            if (data.settings.cached_nodes_data) parseCachedNodes(data.settings.cached_nodes_data);
+                            publicProbeServers.value = data.servers || []; updateCustomStyles();
                             if (probeSys.custom_script && !document.getElementById('kui-custom-html-wrapper')) updateCustomScript(probeSys.custom_script);
                             if (probeView.value === 'map') drawMarkers();
                             if (probeSys.is_public !== 'true' && !isLoggedIn.value) showLoginModal.value = true;
@@ -901,6 +965,7 @@
                         if (activeTab.value === 'settings' && role.value === 'admin') {
                             const probeRes = await fetchApi('/api/probe/admin/data'); const probeData = await probeRes.json();
                             Object.assign(probeSys, probeData.settings);
+                            if (probeData.settings.cached_nodes_data) parseCachedNodes(probeData.settings.cached_nodes_data);
                             adminProbeServers.value = probeData.servers || [];
                         }
                     } catch(e) {} finally { isFetchingKUI = false; }
@@ -958,8 +1023,13 @@
                 const updateUserPassword = async () => { if(!userNewPassword.value) return alert('请输入新密码'); await fetchApi('/api/user/password', { method: 'PUT', body: JSON.stringify({ password: userNewPassword.value }) }); alert('✅ 密码修改成功！请使用新密码重新登录。'); logout(); };
                 const resetMySubLink = async () => { if(confirm('🚨 危险操作！重置后系统将为您签发全新的 UUID 订阅令牌，原链接将【立即作废】！确定要继续重置吗？')) { await fetchApi('/api/user/sub_token', { method: 'PUT' }); alert('✅ 订阅令牌已刷新！'); refreshData(); } };
                 
-                // Clash / 普通 订阅双轨链接生成
-                const generateSubLink = (ip='', format='') => { const tokenToUse = mySubToken.value || authKey.value; return `${currentDomain}/api/sub?user=${currentUser.value}&token=${tokenToUse}${ip?`&ip=${ip}`:''}${format?`&format=${format}`:''}`; };
+                const generateSubLink = (ip='', format='') => { 
+                    const tokenToUse = mySubToken.value || authKey.value; 
+                    let link = `${currentDomain}/api/sub?user=${currentUser.value}&token=${tokenToUse}`;
+                    if (ip) link += `&ip=${ip}`;
+                    if (format) link += `&format=${format}`;
+                    return link;
+                };
                 
                 const copyCommand = (txt, msg) => navigator.clipboard.writeText(txt).then(() => alert(msg));
 
@@ -1000,7 +1070,8 @@
                     probeSys, publicProbeServers, filteredProbeServers, probeView, probeDetailId, probeDetail, setProbeView, openProbeDetail, probeGlobalOnline, probeGlobalOffline, probeGlobalSpeedIn, probeGlobalSpeedOut, probeGlobalNetRx, probeGlobalNetTx, probeGroups, filteredProbeGroups, probeCountryStats, currentFilter,
                     saveProbeSettings, adminProbeServers, probeEditModalOpen, editingProbeNode, openProbeEditModal, saveProbeEdit, deleteProbeNode, currentDomain,
                     qrModalOpen, qrCodeImage, showQrCode, 
-                    showWelcomePopup, closePopup
+                    showWelcomePopup, closePopup,
+                    availableThemes, pingNodes, pullGithubNodes, hasCustomCssFlag
                 };
             }
         }).mount('#app');
