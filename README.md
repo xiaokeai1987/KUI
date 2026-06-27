@@ -1,17 +1,3 @@
-## 🚀 部署指南
-
-### 一键部署到 Cloudflare
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/a6216abcd/K-UI)
-
-- `API_SECRET`: (必填) 设置一个自定义的强密码，用于 API 接口的认证。
-- `ADMIN_USERNAME`: (必填) 默认为 `admin`。
-- `ADMIN_PASSWORD`: (必填) 用于管理面板登录的密码。
-- `TG_BOT_TOKEN`: (选填) Telegram Bot Token，用于节点掉线告警。
-- `TG_CHAT_ID`: (选填) 接收告警的 Telegram Chat ID。
-
-
-
-
 # ⚡ KUI x Server Monitor Pro - Cluster Gateway
 
 ![Vue 3](https://img.shields.io/badge/Frontend-Vue%203-4FC08D?logo=vuedotjs)
