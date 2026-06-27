@@ -1,17 +1,19 @@
 name = "kui"
 compatibility_date = "2026-06-28"
 
-# 数据库绑定 (必须叫 DB)
+# 指定构建输出目录为当前目录，确保 Pages 正确识别文件
+pages_build_output_dir = "."
+
+# 环境变量预设 (部署后会自动覆盖控制台设置)
+[vars]
+API_SECRET = "change_me_to_your_password"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "change_me_to_your_password"
+
+# 注意：虽然可以在此处声明 d1_databases，但 Pages 部署时 
+# Cloudflare 强制要求在控制台进行一次手动绑定以分配权限。
+# 它是 Pages 部署中唯一不能通过配置文件直接“一行命令搞定”的部分。
 [[d1_databases]]
 binding = "DB"
 database_name = "kui-db"
 database_id = "你的-D1-数据库-UUID"
-
-# 环境变量预设
-[vars]
-API_SECRET = "你的自定义强密码"
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "你的管理密码"
-# 选填项
-# TG_BOT_TOKEN = "可选"
-# TG_CHAT_ID = "可选"
