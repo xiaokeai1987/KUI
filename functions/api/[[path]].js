@@ -1,6 +1,6 @@
 // ==========================================
-// KUI Serverless 聚合网关后端 - 完美融合版
-// (包含：自动建表 + 极速8合1协议生成 + CF Monitor Pro API化子系统)
+// KUI Serverless 聚合网关后端 - 精简核心版
+// (包含：自动建表升级 + 极速8合1协议生成 + 探针管理 + Clash订阅 + 动态云端测速/主题)
 // ==========================================
 
 async function sha256(text) {
@@ -30,7 +30,7 @@ async function ensureDbSchema(db) {
             expire_date TEXT DEFAULT '', bandwidth TEXT DEFAULT '', traffic_limit TEXT DEFAULT '', agent_os TEXT DEFAULT 'debian',
             ping_ct TEXT DEFAULT '0', ping_cu TEXT DEFAULT '0', ping_cm TEXT DEFAULT '0', ping_bd TEXT DEFAULT '0',
             monthly_rx TEXT DEFAULT '0', monthly_tx TEXT DEFAULT '0', last_rx TEXT DEFAULT '0', last_tx TEXT DEFAULT '0', 
-            reset_month TEXT DEFAULT '', history TEXT DEFAULT '{}', is_hidden TEXT DEFAULT 'false', virt TEXT DEFAULT ''
+            reset_month TEXT DEFAULT '', history TEXT DEFAULT '{}', is_hidden TEXT DEFAULT 'false', virt TEXT DEFAULT '', reset_day TEXT DEFAULT '1'
         )`
     ];
     for (let query of probeQueries) { try { await db.prepare(query).run(); } catch (e) {} }
@@ -38,6 +38,19 @@ async function ensureDbSchema(db) {
     try { await db.prepare("SELECT username FROM nodes LIMIT 1").first(); } catch (e) { try { await db.prepare("ALTER TABLE nodes ADD COLUMN username TEXT DEFAULT 'admin'").run(); } catch(e){} }
     try { await db.prepare("SELECT disk FROM servers LIMIT 1").first(); } catch (e) { const newCols = ['disk INTEGER DEFAULT 0', 'load TEXT DEFAULT ""', 'uptime TEXT DEFAULT ""', 'net_in_speed INTEGER DEFAULT 0', 'net_out_speed INTEGER DEFAULT 0', 'tcp_conn INTEGER DEFAULT 0', 'udp_conn INTEGER DEFAULT 0']; for (let col of newCols) { try { await db.prepare(`ALTER TABLE servers ADD COLUMN ${col}`).run(); } catch(err){} } }
     try { await db.prepare("SELECT sub_token FROM users LIMIT 1").first(); } catch (e) { try { await db.prepare("ALTER TABLE users ADD COLUMN sub_token TEXT").run(); } catch(err){} }
+    try { await db.prepare("SELECT reset_day FROM probe_servers LIMIT 1").first(); } catch (e) { try { await db.prepare("ALTER TABLE probe_servers ADD COLUMN reset_day TEXT DEFAULT '1'").run(); } catch(e){} }
+
+    // 初始化云端测速数据
+    const checkNodes = await db.prepare("SELECT value FROM probe_settings WHERE key = 'cached_nodes_data'").first();
+    if (!checkNodes) {
+        try {
+            const res = await fetch('https://raw.githubusercontent.com/a63414262/CF-Server-Monitor-Pro/refs/heads/main/nodes.json');
+            if (res.ok) {
+                const dataText = await res.text();
+                await db.prepare("INSERT INTO probe_settings (key, value) VALUES ('cached_nodes_data', ?)").bind(dataText).run();
+            }
+        } catch(e) {}
+    }
 }
 
 async function verifyAuth(authHeader, db, env) {
@@ -69,8 +82,65 @@ async function handleProbeAPI(request, env, context, pathArray) {
     const method = request.method;
     const db = env.DB;
 
+    // Telegram Bot 交互回调控制
+    if (method === 'POST' && subPath === 'tg_webhook') {
+        try {
+            const body = await request.json();
+            const message = body.message; const callback_query = body.callback_query;
+            let tgBotToken = ''; let tgChatId = '';
+            try { const { results } = await db.prepare("SELECT key, value FROM probe_settings WHERE key IN ('tg_bot_token', 'tg_chat_id')").all(); results.forEach(r => { if(r.key === 'tg_bot_token') tgBotToken = r.value; if(r.key === 'tg_chat_id') tgChatId = r.value; }); } catch(e){}
+            
+            const tgSend = async (chatId, text, kb=null) => { const p = { chat_id: chatId, text, parse_mode: 'HTML' }; if (kb) p.reply_markup = kb; await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(p)}); };
+            const tgEdit = async (chatId, msgId, text, kb=null) => { const p = { chat_id: chatId, message_id: msgId, text, parse_mode: 'HTML' }; if (kb) p.reply_markup = kb; await fetch(`https://api.telegram.org/bot${tgBotToken}/editMessageText`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(p)}); };
+
+            let chatId, text, msgId;
+            if (message) { chatId = message.chat.id.toString(); text = message.text || ''; msgId = message.message_id; } 
+            else if (callback_query) { chatId = callback_query.message.chat.id.toString(); text = callback_query.data; msgId = callback_query.message.message_id; }
+            if (chatId !== tgChatId) return new Response('OK', { status: 200 });
+
+            const mainMenuText = `🖥 <b>Server Monitor Pro 探针管理</b>\n\n您可以使用命令快速设置系统：\n<code>/set_interval 10</code> - 上报间隔10秒\n<code>/set_sitetitle 新标题</code> - 更改大盘标题\n<code>/menu</code> - 调出本菜单`;
+            const mainMenuKb = { inline_keyboard: [ [{text: '📋 探针节点列表', callback_data: 'cb_list_nodes'}], [{text: '⚙️ 系统设置快捷开关', callback_data: 'cb_settings'}] ] };
+            
+            if (callback_query) {
+                if (text === 'cb_menu') await tgEdit(chatId, msgId, mainMenuText, mainMenuKb);
+                else if (text === 'cb_list_nodes') {
+                    const { results } = await db.prepare('SELECT id, name, last_updated FROM probe_servers WHERE is_hidden != "true"').all();
+                    let kb = { inline_keyboard: [] };
+                    for (const s of results) { kb.inline_keyboard.push([{text: `${s.name}`, callback_data: `cb_node_${s.id}`}]); }
+                    kb.inline_keyboard.push([{text: '🔙 返回', callback_data: 'cb_menu'}]);
+                    await tgEdit(chatId, msgId, '📋 <b>当前在线探针：</b>', kb);
+                }
+                else if (text.startsWith('cb_node_')) {
+                    const id = text.split('_')[2]; const s = await db.prepare('SELECT * FROM probe_servers WHERE id = ?').bind(id).first();
+                    if (s) await tgEdit(chatId, msgId, `🖥 <b>探针详情:</b> ${s.name}\n\n系统: ${s.os||'-'}\nIP类型: IPv4:${s.ip_v4} / IPv6:${s.ip_v6}\n运行时长: ${s.uptime}\n分组: ${s.server_group}`, {inline_keyboard: [[{text: '🔙 返回列表', callback_data: 'cb_list_nodes'}]]});
+                }
+                else if (text === 'cb_settings') {
+                    let set = { is_public: 'true', show_price: 'true' }; try { const { results } = await db.prepare("SELECT key, value FROM probe_settings").all(); results.forEach(r => set[r.key]=r.value); } catch(e){}
+                    const kb = { inline_keyboard: [
+                        [{text: `${set.is_public === 'true' ? '✅' : '❌'} 公开大盘`, callback_data: 'cb_tog_is_public'}, {text: `${set.show_price === 'true' ? '✅' : '❌'} 显示价格`, callback_data: 'cb_tog_show_price'}],
+                        [{text: '🔙 返回主菜单', callback_data: 'cb_menu'}]
+                    ]};
+                    await tgEdit(chatId, msgId, '⚙️ <b>点击切换探针前台展示状态</b>', kb);
+                }
+                else if (text.startsWith('cb_tog_')) {
+                    const key = text.replace('cb_tog_', '');
+                    let cur = 'true'; try { const r = await db.prepare('SELECT value FROM probe_settings WHERE key=?').bind(key).first(); if(r) cur = r.value; } catch(e){}
+                    await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(key, cur==='true'?'false':'true').run();
+                    await tgSend(chatId, `✅ 属性 ${key} 已成功切换！`);
+                }
+            }
+            if (message) {
+                const cmdParts = text.trim().split(/\s+/); const cmd = cmdParts[0].toLowerCase();
+                if (cmd === '/start' || cmd === '/menu') await tgSend(chatId, mainMenuText, mainMenuKb);
+                else if (cmd === '/set_interval' && cmdParts[1]) { await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('report_interval', cmdParts[1]).run(); await tgSend(chatId, `✅ 上报间隔设为 ${cmdParts[1]} 秒`); }
+                else if (cmd === '/set_sitetitle') { await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('site_title', text.replace(cmdParts[0], '').trim()).run(); await tgSend(chatId, '✅ 大盘标题已更新'); }
+            }
+            return new Response('OK', { status: 200 });
+        } catch(e) { return new Response('Webhook Error', {status:200}); }
+    }
+
     if (method === 'GET' && subPath === 'public') {
-        const settings = { theme: 'theme1', is_public: 'true', site_title: '⚡ Server Monitor Pro', show_price: 'true', show_expire: 'true', show_bw: 'true', show_tf: 'true', custom_css: '', custom_bg: '', custom_head: '', custom_script: '', report_interval: '5' };
+        const settings = { theme: 'theme1', is_public: 'true', site_title: '⚡ Server Monitor Pro', show_price: 'true', show_expire: 'true', show_bw: 'true', show_tf: 'true', custom_css: '', custom_bg: '', custom_head: '', custom_script: '', report_interval: '5', enable_popup: 'false', popup_content: '', cached_nodes_data: '' };
         try { const { results } = await db.prepare('SELECT * FROM probe_settings').all(); if (results) results.forEach(r => settings[r.key] = r.value); } catch(e){}
         
         const isAjax = url.searchParams.get('ajax') === '1';
@@ -99,22 +169,43 @@ async function handleProbeAPI(request, env, context, pathArray) {
 
     if (!(await verifyAuth(request.headers.get("Authorization"), db, env))) return Response.json({error: "Unauthorized"}, {status: 401});
 
+    // 🌟 GitHub 云端拉取三网节点库
+    if (method === 'POST' && subPath === 'admin/pull_github') {
+        try {
+            const res = await fetch('https://raw.githubusercontent.com/a63414262/CF-Server-Monitor-Pro/refs/heads/main/nodes.json');
+            if (res.ok) {
+                const dataText = await res.text();
+                await db.prepare("INSERT INTO probe_settings (key, value) VALUES ('cached_nodes_data', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(dataText).run();
+                return Response.json({ success: true });
+            }
+            return Response.json({ error: 'Fetch failed' }, { status: 400 });
+        } catch (e) { return Response.json({ error: e.message }, { status: 400 }); }
+    }
+
     if (method === 'GET' && subPath === 'admin/data') {
         const settings = {};
         try { const { results } = await db.prepare('SELECT * FROM probe_settings').all(); if (results) results.forEach(r => settings[r.key] = r.value); } catch(e){}
-        const servers = (await db.prepare('SELECT id, name, last_updated, server_group, price, expire_date, bandwidth, traffic_limit, agent_os, is_hidden FROM probe_servers').all()).results;
+        const servers = (await db.prepare('SELECT id, name, last_updated, server_group, price, expire_date, bandwidth, traffic_limit, agent_os, is_hidden, reset_day FROM probe_servers').all()).results;
         return Response.json({ settings, servers });
     }
     
     if (method === 'POST' && subPath === 'admin/settings') {
         const { settings } = await request.json();
         for (const [k, v] of Object.entries(settings)) { await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v).run(); }
+        if (settings.tg_bot_token) {
+            try {
+               await fetch(`https://api.telegram.org/bot${settings.tg_bot_token}/setWebhook`, {
+                  method: 'POST', headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ url: `${url.origin}/api/probe/tg_webhook` })
+               });
+            } catch(e) {}
+        }
         return Response.json({ success: true });
     }
 
     if (method === 'PUT' && subPath === 'admin/server') {
         const data = await request.json();
-        await db.prepare(`UPDATE probe_servers SET name=?, server_group=?, price=?, expire_date=?, bandwidth=?, traffic_limit=?, agent_os=?, is_hidden=? WHERE id=?`).bind(data.name || 'Unnamed', data.server_group || '默认分组', data.price || '', data.expire_date || '', data.bandwidth || '', data.traffic_limit || '', data.agent_os || 'debian', data.is_hidden || 'false', data.id).run();
+        await db.prepare(`UPDATE probe_servers SET name=?, server_group=?, price=?, expire_date=?, bandwidth=?, traffic_limit=?, agent_os=?, is_hidden=?, reset_day=? WHERE id=?`).bind(data.name || 'Unnamed', data.server_group || '默认分组', data.price || '', data.expire_date || '', data.bandwidth || '', data.traffic_limit || '', data.agent_os || 'debian', data.is_hidden || 'false', data.reset_day || '1', data.id).run();
         return Response.json({ success: true });
     }
     
@@ -147,7 +238,7 @@ export async function onRequest(context) {
         return Response.json({ success: true });
     }
 
-    // 🌟 Agent 统一探针与管理上报接口
+    // 🌟 Agent 统一探针与管理上报接口 (融入全新的 Reset Day 计算和动态云端测速节点)
     if (action === "report" && method === "POST") {
         if (!(await verifyAuth(request.headers.get("Authorization"), db, env))) return new Response("Unauthorized", { status: 401 });
         const data = await request.json(); 
@@ -174,23 +265,45 @@ export async function onRequest(context) {
             if (countryCode.toUpperCase() === 'TW') countryCode = 'CN';
 
             const probeServer = await db.prepare('SELECT * FROM probe_servers WHERE id = ?').bind(vpsIp).first();
-            const localNow = new Date(nowMs + 8 * 60 * 60000); 
-            const currentMonthStr = `${localNow.getFullYear()}-${localNow.getMonth() + 1}`;
             
+            // --- 全新核心：基于动态 reset_day 的流量生命周期重置 ---
+            const localNow = new Date(nowMs + 8 * 60 * 60000); 
+            let y = localNow.getFullYear();
+            let m = localNow.getMonth() + 1;
+            let d = localNow.getDate();
+            
+            let resetDayVal = probeServer ? parseInt(probeServer.reset_day) || 1 : 1;
+            if (resetDayVal < 1) resetDayVal = 1; if (resetDayVal > 31) resetDayVal = 31;
+            
+            let maxDaysThisMonth = new Date(y, m, 0).getDate();
+            let actualResetDayThisMonth = Math.min(resetDayVal, maxDaysThisMonth);
+            
+            let currentCycleStr = '';
+            if (d < actualResetDayThisMonth) {
+                let pm = m - 1; let py = y;
+                if (pm === 0) { pm = 12; py -= 1; }
+                let maxDaysPrevMonth = new Date(py, pm, 0).getDate();
+                let actualResetDayPrevMonth = Math.min(resetDayVal, maxDaysPrevMonth);
+                currentCycleStr = `${py}-${pm}-${actualResetDayPrevMonth}`;
+            } else {
+                currentCycleStr = `${y}-${m}-${actualResetDayThisMonth}`;
+            }
+
             let monthly_rx = 0, monthly_tx = 0, last_rx = 0, last_tx = 0;
-            let reset_month = currentMonthStr;
+            let reset_month = currentCycleStr;
             let history = {};
 
             if (!probeServer) {
-                await db.prepare(`INSERT INTO probe_servers (id, name, cpu, ram, disk, load_avg, uptime, last_updated, ram_total, net_rx, net_tx, net_in_speed, net_out_speed, os, cpu_info, arch, boot_time, ram_used, swap_total, swap_used, disk_total, disk_used, processes, tcp_conn, udp_conn, country, ip_v4, ip_v6, server_group, price, expire_date, bandwidth, traffic_limit, ping_ct, ping_cu, ping_cm, ping_bd, monthly_rx, monthly_tx, last_rx, last_tx, reset_month, agent_os, history, is_hidden, virt) VALUES (?, ?, '0', '0', '0', '0', '0', 0, '0', '0', '0', '0', '0', '', '', '', '', '0', '0', '0', '0', '0', '0', '0', '0', ?, '1', '0', '默认分组', '免费', '', '', '', '0', '0', '0', '0', '0', '0', '0', '0', ?, 'debian', '{}', 'false', '')`).bind(vpsIp, serverName, countryCode, currentMonthStr).run();
+                await db.prepare(`INSERT INTO probe_servers (id, name, cpu, ram, disk, load_avg, uptime, last_updated, ram_total, net_rx, net_tx, net_in_speed, net_out_speed, os, cpu_info, arch, boot_time, ram_used, swap_total, swap_used, disk_total, disk_used, processes, tcp_conn, udp_conn, country, ip_v4, ip_v6, server_group, price, expire_date, bandwidth, traffic_limit, ping_ct, ping_cu, ping_cm, ping_bd, monthly_rx, monthly_tx, last_rx, last_tx, reset_month, agent_os, history, is_hidden, virt, reset_day) VALUES (?, ?, '0', '0', '0', '0', '0', 0, '0', '0', '0', '0', '0', '', '', '', '', '0', '0', '0', '0', '0', '0', '0', '0', ?, '1', '0', '默认分组', '免费', '', '', '', '0', '0', '0', '0', '0', '0', '0', '0', ?, 'debian', '{}', 'false', '', '1')`).bind(vpsIp, serverName, countryCode, currentCycleStr).run();
             } else {
                 monthly_rx = parseFloat(probeServer.monthly_rx || '0'); monthly_tx = parseFloat(probeServer.monthly_tx || '0');
                 last_rx = parseFloat(probeServer.last_rx || '0'); last_tx = parseFloat(probeServer.last_tx || '0');
-                reset_month = probeServer.reset_month || currentMonthStr;
+                reset_month = probeServer.reset_month || currentCycleStr;
                 
                 let autoReset = 'false';
                 try { const r = await db.prepare("SELECT value FROM probe_settings WHERE key = 'auto_reset_traffic'").first(); if (r) autoReset = r.value; } catch(e){}
-                if (autoReset === 'true' && currentMonthStr !== reset_month) { monthly_rx = 0; monthly_tx = 0; reset_month = currentMonthStr; }
+                // 周期变动立即清零结算
+                if (autoReset === 'true' && currentCycleStr !== reset_month) { monthly_rx = 0; monthly_tx = 0; reset_month = currentCycleStr; }
                 try { history = JSON.parse(probeServer.history || '{}'); } catch(e) {}
             }
 
@@ -230,10 +343,20 @@ export async function onRequest(context) {
         
         let fastMode = false; try { const uiActive = await db.prepare("SELECT ts FROM sys_config WHERE key = 'ui_active'").first(); if (uiActive && (nowMs - uiActive.ts < 20000)) fastMode = true; } catch(e) {}
         
-        let reportInterval = 5;
-        try { const r = await db.prepare("SELECT value FROM probe_settings WHERE key = 'report_interval'").first(); if (r && r.value) reportInterval = parseInt(r.value); } catch(e) {}
+        let reportInterval = 5; let pingCt = 'default'; let pingCu = 'default'; let pingCm = 'default';
+        try { 
+            const { results } = await db.prepare("SELECT key, value FROM probe_settings WHERE key IN ('report_interval', 'ping_node_ct', 'ping_node_cu', 'ping_node_cm')").all(); 
+            if (results) {
+                results.forEach(r => {
+                    if (r.key === 'report_interval') reportInterval = parseInt(r.value) || 5;
+                    if (r.key === 'ping_node_ct') pingCt = r.value;
+                    if (r.key === 'ping_node_cu') pingCu = r.value;
+                    if (r.key === 'ping_node_cm') pingCm = r.value;
+                });
+            }
+        } catch(e) {}
         
-        return Response.json({ success: true, fast_mode: fastMode, interval: reportInterval });
+        return Response.json({ success: true, fast_mode: fastMode, interval: reportInterval, ping_ct: pingCt, ping_cu: pingCu, ping_cm: pingCm });
     }
 
     if (action === "config" && method === "GET") {
@@ -245,18 +368,56 @@ export async function onRequest(context) {
         return Response.json({ success: true, configs: machineNodes });
     }
 
+    // 🌟 核心拦截并拆分普通订阅与 Clash 订阅生成
     if (action === "sub" && method === "GET") {
-        const urlObj = new URL(request.url); const ip = urlObj.searchParams.get("ip"); const reqUser = urlObj.searchParams.get("user"); const token = urlObj.searchParams.get("token"); const adminUser = env.ADMIN_USERNAME || "admin";
+        const urlObj = new URL(request.url); 
+        const ip = urlObj.searchParams.get("ip"); 
+        const reqUser = urlObj.searchParams.get("user"); 
+        const token = urlObj.searchParams.get("token"); 
+        const format = urlObj.searchParams.get("format"); 
+        const adminUser = env.ADMIN_USERNAME || "admin";
+
         let isValid = false;
-        if (reqUser === adminUser) { let adminSubToken = await sha256(env.ADMIN_PASSWORD || "admin"); try { const r = await db.prepare("SELECT val FROM sys_config WHERE key='admin_sub_token'").first(); if(r && r.val) adminSubToken = r.val; } catch(e){} isValid = (token === adminSubToken) || (token === await sha256(env.ADMIN_PASSWORD || "admin")); } 
-        else { const u = await db.prepare("SELECT password, sub_token FROM users WHERE username = ?").bind(reqUser).first(); if (u) isValid = (token === u.sub_token) || (!u.sub_token && token === u.password); }
+        if (reqUser === adminUser) { 
+            let adminSubToken = await sha256(env.ADMIN_PASSWORD || "admin"); 
+            try { const r = await db.prepare("SELECT val FROM sys_config WHERE key='admin_sub_token'").first(); if(r && r.val) adminSubToken = r.val; } catch(e){} 
+            isValid = (token === adminSubToken) || (token === await sha256(env.ADMIN_PASSWORD || "admin")); 
+        } 
+        else { 
+            const u = await db.prepare("SELECT password, sub_token FROM users WHERE username = ?").bind(reqUser).first(); 
+            if (u) isValid = (token === u.sub_token) || (!u.sub_token && token === u.password); 
+        }
+        
         if (!isValid) return new Response("Forbidden", { status: 403 });
-        const now = Date.now(); let query; let sqlParams = [now];
-        if (reqUser === adminUser) { query = `SELECT * FROM nodes WHERE enable = 1 AND (traffic_limit = 0 OR traffic_used < traffic_limit) AND (expire_time = 0 OR expire_time > ?) AND (username = ? OR username = 'admin')`; sqlParams.push(adminUser); if (ip) { query += " AND vps_ip = ?"; sqlParams.push(ip); } } 
-        else { query = `SELECT n.* FROM nodes n JOIN users u ON n.username = u.username WHERE n.enable = 1 AND (n.traffic_limit = 0 OR n.traffic_used < n.traffic_limit) AND (n.expire_time = 0 OR n.expire_time > ?) AND n.username = ? AND u.enable = 1 AND (u.traffic_limit = 0 OR u.traffic_used < u.traffic_limit) AND (u.expire_time = 0 OR u.expire_time > ?)`; sqlParams.push(reqUser, now); if (ip) { query += " AND n.vps_ip = ?"; sqlParams.push(ip); } }
-        const { results } = await db.prepare(query).bind(...sqlParams).all(); let subLinks = [];
+        
+        const now = Date.now(); 
+        let query; 
+        let sqlParams = [now];
+        
+        if (reqUser === adminUser) { 
+            query = `SELECT * FROM nodes WHERE enable = 1 AND (traffic_limit = 0 OR traffic_used < traffic_limit) AND (expire_time = 0 OR expire_time > ?) AND (username = ? OR username = 'admin')`; 
+            sqlParams.push(adminUser); 
+            if (ip) { query += " AND vps_ip = ?"; sqlParams.push(ip); } 
+        } else { 
+            query = `SELECT n.* FROM nodes n JOIN users u ON n.username = u.username WHERE n.enable = 1 AND (n.traffic_limit = 0 OR n.traffic_used < n.traffic_limit) AND (n.expire_time = 0 OR n.expire_time > ?) AND n.username = ? AND u.enable = 1 AND (u.traffic_limit = 0 OR u.traffic_used < u.traffic_limit) AND (u.expire_time = 0 OR u.expire_time > ?)`; 
+            sqlParams.push(reqUser, now); 
+            if (ip) { query += " AND n.vps_ip = ?"; sqlParams.push(ip); } 
+        }
+        
+        const { results } = await db.prepare(query).bind(...sqlParams).all(); 
+        
+        let subLinks = [];
+        let clashProxies = [];
+        let proxyNames = [];
+
         for (let node of results) {
-            const vpsInfo = await db.prepare("SELECT name FROM servers WHERE ip = ?").bind(node.vps_ip).first(); const rawRemark = `${vpsInfo ? vpsInfo.name : 'KUI'} | ${node.protocol}_${node.port}`; const remark = encodeURIComponent(rawRemark); let link = "";
+            const vpsInfo = await db.prepare("SELECT name FROM servers WHERE ip = ?").bind(node.vps_ip).first(); 
+            const rawRemark = `${vpsInfo ? vpsInfo.name : 'KUI'} | ${node.protocol}_${node.port}`; 
+            const remark = encodeURIComponent(rawRemark); 
+            let link = "";
+            let cProxy = "";
+
+            // --- 传统 Base64 URL 生成 ---
             switch (node.protocol) {
                 case "VLESS": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&security=none&type=tcp#${remark}`; break;
                 case "XTLS-Reality": case "Reality": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${node.sni}&fp=chrome&pbk=${node.public_key}&sid=${node.short_id || ""}&type=tcp&headerType=none#${remark}`; break;
@@ -271,7 +432,77 @@ export async function onRequest(context) {
                 case "VLESS-Argo": if (!node.sni.includes('等待')) link = `vless://${node.uuid}@${node.sni}:443?encryption=none&security=tls&type=ws&host=${node.sni}&path=%2F#${remark}-Argo`; break;
             }
             if (link) subLinks.push(link);
+
+            // --- 动态拼装 Clash YAML 代理字典 (支持 Clash Meta / Mihomo) ---
+            if (format === 'clash') {
+                if (node.protocol.includes("VLESS") || node.protocol.includes("Reality")) {
+                    const serverIpOrSni = (node.protocol === 'VLESS-Argo' && !node.sni.includes('等待')) ? node.sni : node.vps_ip;
+                    const serverPort = node.protocol === 'VLESS-Argo' ? 443 : node.port;
+                    cProxy = `  - name: "${rawRemark}"\n    type: vless\n    server: ${serverIpOrSni}\n    port: ${serverPort}\n    uuid: ${node.uuid}\n    udp: true`;
+                    
+                    if (node.protocol === "XTLS-Reality" || node.protocol === "Reality") {
+                        cProxy += `\n    tls: true\n    flow: xtls-rprx-vision\n    servername: ${node.sni}\n    client-fingerprint: chrome\n    reality-opts:\n      public-key: ${node.public_key}\n      short-id: ${node.short_id || ""}`;
+                    } else if (node.protocol === "gRPC-Reality") {
+                        cProxy += `\n    tls: true\n    servername: ${node.sni}\n    client-fingerprint: chrome\n    network: grpc\n    grpc-opts:\n      grpc-service-name: grpc\n    reality-opts:\n      public-key: ${node.public_key}\n      short-id: ${node.short_id || ""}`;
+                    } else if (node.protocol === "H2-Reality") {
+                        cProxy += `\n    tls: true\n    servername: ${node.sni}\n    client-fingerprint: chrome\n    network: h2\n    reality-opts:\n      public-key: ${node.public_key}\n      short-id: ${node.short_id || ""}`;
+                    } else if (node.protocol === 'VLESS-Argo' && !node.sni.includes('等待')) {
+                        cProxy += `\n    tls: true\n    servername: ${node.sni}\n    network: ws\n    ws-opts:\n      path: "/"\n      headers:\n        Host: ${node.sni}`;
+                    }
+                } else if (node.protocol === "Trojan") {
+                    cProxy = `  - name: "${rawRemark}"\n    type: trojan\n    server: ${node.vps_ip}\n    port: ${node.port}\n    password: ${node.private_key}\n    udp: true\n    sni: ${node.sni}\n    skip-cert-verify: true`;
+                } else if (node.protocol === "Hysteria2") {
+                    cProxy = `  - name: "${rawRemark}"\n    type: hysteria2\n    server: ${node.vps_ip}\n    port: ${node.port}\n    password: ${node.uuid}\n    sni: ${node.sni}\n    skip-cert-verify: true`;
+                } else if (node.protocol === "TUIC") {
+                    cProxy = `  - name: "${rawRemark}"\n    type: tuic\n    server: ${node.vps_ip}\n    port: ${node.port}\n    uuid: ${node.uuid}\n    password: ${node.private_key}\n    sni: ${node.sni}\n    skip-cert-verify: true`;
+                }
+                
+                if (cProxy) {
+                    clashProxies.push(cProxy);
+                    proxyNames.push(`"${rawRemark}"`);
+                }
+            }
         }
+
+        // --- 若为 Clash 格式，渲染 YAML 返回 ---
+        if (format === 'clash') {
+            const proxyGroupList = proxyNames.length > 0 ? proxyNames.map(n => `      - ${n}`).join('\n') : '      - DIRECT';
+            const clashYaml = `port: 7890
+socks-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+ipv6: false
+external-controller: 127.0.0.1:9090
+
+proxies:
+${clashProxies.join('\n')}
+
+proxy-groups:
+  - name: "PROXY"
+    type: select
+    proxies:
+      - "AUTO"
+${proxyGroupList}
+  - name: "AUTO"
+    type: url-test
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    proxies:
+${proxyGroupList}
+
+rules:
+  - MATCH,PROXY
+`;
+            return new Response(clashYaml, { 
+                headers: { 
+                    "Content-Type": "text/yaml; charset=utf-8", 
+                    "Content-Disposition": "attachment; filename=kui-clash.yaml" 
+                }
+            });
+        }
+
+        // --- 否则走默认的 Base64 普通订阅格式 ---
         return new Response(btoa(unescape(encodeURIComponent(subLinks.join('\n')))), { headers: { "Content-Type": "text/plain; charset=utf-8" }});
     }
 
@@ -332,7 +563,10 @@ export async function onRequestScheduled(context) {
     try {
         const { results } = await db.prepare(`SELECT ip, name, last_report FROM servers WHERE last_report < ? AND alert_sent = 0`).bind(nowMs - 180000).all();
         if (results && results.length > 0) {
-            const tgBotToken = env.TG_BOT_TOKEN; const tgChatId = env.TG_CHAT_ID; const updateStmts = [];
+            let tgBotToken = env.TG_BOT_TOKEN; let tgChatId = env.TG_CHAT_ID;
+            try { const { results: settings } = await db.prepare("SELECT key, value FROM probe_settings WHERE key IN ('tg_bot_token', 'tg_chat_id')").all(); settings.forEach(r => { if(r.key === 'tg_bot_token') tgBotToken = r.value; if(r.key === 'tg_chat_id') tgChatId = r.value; }); } catch(e){}
+            
+            const updateStmts = [];
             for (let vps of results) {
                 if (tgBotToken && tgChatId) { const text = `⚠️ [KUI 节点失联告警]\n\n节点别名: ${vps.name}\n公网IP: ${vps.ip}\n最后在线: ${new Date(vps.last_report).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`; await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_id: tgChatId, text }) }); }
                 updateStmts.push(db.prepare("UPDATE servers SET alert_sent = 1 WHERE ip = ?").bind(vps.ip));
